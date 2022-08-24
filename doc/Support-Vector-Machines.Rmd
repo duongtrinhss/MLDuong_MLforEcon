@@ -1,0 +1,151 @@
+---
+title: "Support Vector Machines"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    number_sections: true
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    code_folding: show
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+fontsize: 10pt
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+
+
+# LAB: Detecting Refugee Shelters in Drone Images
+In this lab we will analyze drone images from the Rohingya camps in southern Bangladesh. Our goal is to use a SVM to predict which parts of an image show a shelter.
+
+## Optional data pre-processing
+```{r}
+# library("stars")
+# library("sf")
+# library("terra")
+# 
+# # Define seeds
+# def_seed <- 600
+```
+
+```{r}
+# load the original data
+# (img_ <-  rast("/Users/duongtrinh/Dropbox/FIELDS/Machine Learning/Courses/[2022] SGPE Summer School/Tutorials/5_SVM/out_14000_68000.tif"))
+```
+
+
+
+# Loading the data
+
+```{r}
+load("/Users/duongtrinh/Dropbox/FIELDS/Machine Learning/Courses/[2022] SGPE Summer School/Tutorials/5_SVM/shelters_data_5.RData")
+```
+
+```{r}
+library("ggplot2")
+p <- ggplot(dta, aes(x=x, y=y, fill = R)) +
+  coord_equal() + theme_minimal() + geom_tile() +
+  theme(legend.position = "none") +
+  scale_fill_gradient(low = "black", high = "white")
+```
+
+Extend the above plot by overlaying the shelter shapes
+
+```{r}
+def_seed <- 600
+set.seed(def_seed)
+N <-  1000
+x1 <- rnorm(N)
+x2 <- rnorm(N)
+y <-  x1 < 0.2 & x2 < 0.7 & x1 > -1 & x2 > - 0.4
+y <-  factor(y, label = c("no", "yes"))
+simdat <- data.frame(x1 = x1, x2 = x2, truth = y)
+ggplot(simdat, aes(x1, x2, col = truth)) +
+  geom_point()
+
+
+```
+
+
+```{r}
+library(mlr3verse)
+
+# create task
+(tsk_svm <- as_task_classif(x = simdat, target = "truth"))
+
+# select learner
+learner_svm <-  lrn("classif.svm", type = "C-classification")
+learner_svm$predict_type = "prob"
+
+# parallelization
+set_threads(learner_svm, n = 4)
+
+# search space
+search_space <- ps(
+  cost = p_dbl(-1,1, trafo = function(x) 10^x),
+  kernel = p_fct(c("linear", "polynomial", "radial"))
+)
+
+# resampling
+tuner_svm <- tnr("grid_search", resolution = 3)
+```
+
+
+```{r}
+instance_svm = TuningInstanceSingleCrit$new(
+  task = tsk_svm,
+  learner = learner_svm,
+  resampling = rsmp("cv"),
+  measure = msr("classif.auc"),
+  search_space = search_space,
+  terminator = trm("none") # stopping criterion
+)
+
+instance_svm
+
+tuner_svm$optimize(instance_svm)
+
+(opt_params_svm<-instance_svm$result_learner_param_vals)
+
+learner_svm2 <-  lrn("classif.svm",type="C-classification",kernel="radial",cost=10)
+
+str(learner_svm2)
+
+learner_svm2$train(tsk_svm)
+learner_svm2$model
+
+## prediction
+sw_test_hat <- learner_svm2$predict_newdata(test) 
+ne_hat<- learner_svm2$predict_newdata(northeast) 
+
+```
+
+
+
+# Splitting the data spatially
+```{r}
+
+```
+
+# Tunning
+
+
+
+
+
+
+
+

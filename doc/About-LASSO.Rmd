@@ -1,0 +1,410 @@
+---
+title: "About Lasso"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    number_sections: true
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    code_folding: show
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+bibliography: MLrefs.bib
+fontsize: 10pt
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+
+# Data Generating Process
+
+```{r, message=FALSE}
+# Support Packages
+library(tidyverse)
+library(purrr)
+library(ggplot2)
+library(gridExtra)
+library(glmnet)
+library(caret)
+```
+
+```{r}
+# Data Generating Process
+# Note: library(pracma) # for a (non-symmetric) Toeplitz matrix
+GenRegr <- function(n,p,options) {
+  # Generate predictors x
+  if (options.corr == 0) {# Uncorrelated predictors
+    x = matrix(rnorm(n*p),n,p)
+  }
+  else if (options.corr == 1) {# Spatially ncorrelated predictors
+    C = toeplitz(options.rho^(0:(p-1)))
+    x = matrix(rnorm(n*p),n,p)%*%chol(C)
+  }
+  else {
+    print('Wrong choice of options.corr')
+  }
+  
+  x <- data.matrix(sapply(data.frame(x), function(x) {(x-mean(x))/sd(x)})) # Standardize x
+  
+  # Generate coefficients
+  beta <- rep(0,p)
+  beta[1:6] <- c(1.5,-1.5,2,-2,2.5,-2.5)
+    # beta[1:6] <- rep(2,6)
+
+  
+  if (options.corr == 0) {
+    signal_y <- sum(beta^2)
+  } 
+  else if (options.corr == 1) {
+    signal_y <- sum((chol(C)%*%beta)^2)
+  }
+  
+  c <- signal_y*((1-options.R2)/options.R2) # mean(sigmasq) is c to obtain desirable options.R2 (or SNR)
+  
+  # Generate epsilon
+  if (options.epsilon == 0) { # iid error
+    sigmasq <- c
+  } 
+  else if (options.epsilon == 1) {
+    temp = (x%*%beta)
+    sigmasq = c*temp/mean(temp)
+  }
+  
+  epsilon = sqrt(sigmasq) * rnorm(n)
+  
+  # Generate y
+  y = x%*%beta + epsilon
+  
+  return(list(y = y, x = x, beta = beta, sigmasq = sigmasq))
+}
+```
+
+## DGP 1 - Homoskedasticity, Uncorrelated predictors, Rsquared = 0.4 (n = 100, p = 50)
+
+```{r}
+# Data Generating Process ====
+set.seed(2907)
+n = 100
+p = 50
+options.corr = 0
+options.R2 = 0.4
+options.epsilon = 0
+options.rho = NA
+
+df <- GenRegr(n, p, options)
+
+y <- df$y
+X <- df$x
+beta_true <-  df$beta
+sigmasq_true <- df$sigmasq
+
+dat <- data.frame(y,X)
+
+df_beta_true <- data.frame(beta = 1:length(beta_true), value = beta_true)
+
+ggplot(df_beta_true, aes(x = beta, y = value)) +
+  geom_bar(fill = "red", stat = "identity", position = "identity", alpha = 0.5)
+```
+
+```{r}
+# Data Partitioning
+set.seed(100)
+index <-  sample(1:nrow(dat), 0.7*nrow(dat))
+
+str(index)
+
+train <- dat[index,] # 70x(p+1)
+test <- dat[-index,] # 30x(p+1)
+
+cols <- names(dat)[2:(p+1)]
+# Scaling the numeric features
+pre_proc_val <- preProcess(train[,cols], method = c("center","scale"))
+
+train[,cols] <- predict(pre_proc_val,train[,cols])
+test[,cols] <- predict(pre_proc_val,test[,cols])
+
+x <- as.matrix(train[,cols])
+y_train = train$y
+
+x_test <- as.matrix(test[,cols])
+y_test = test$y
+```
+
+
+
+
+
+# Method
+
+```{r}
+lasso_reg <- function(x,y,x_test) {
+  cv_pen <- cv.glmnet(x, y, alpha = 1, nlambda = 100,
+                      family = 'gaussian', standardize = TRUE, nfolds = 5)
+  run_pen <- glmnet(x, y, alpha = 1, lambda = cv_pen$lambda,
+                    family = 'gaussian', standardize = TRUE, nfolds = 5)
+  solution_path <- Matrix(run_pen$beta, sparse = TRUE)
+  colnames(solution_path) <- cv_pen$lambda
+  
+  lambda.min_idx <- which.min(abs(cv_pen$lambda-cv_pen$lambda.min))
+  beta.cv <- solution_path[,lambda.min_idx]
+  
+  active <- rep(FALSE, ncol(x))
+  active[which(beta.cv!=0)] <- TRUE
+  xnew <- x[,active]
+  beta.ols <- solve(t(xnew)%*%xnew)%*%t(xnew)%*%y
+  beta.debiased <- rep(0, ncol(x))
+  beta.debiased[active] <- beta.ols
+  
+  str(t(xnew)%*%xnew)
+  y.fit <- x_test%*%beta.cv
+  
+  return(list(beta.cv = beta.cv, beta.debiased = beta.debiased, y.fit = y.fit))
+}
+
+lasso_reg2 <- function(x,y,x_test, nlambda = 50) {
+  cv_pen <- cv.glmnet(x, y, alpha = 1, nlambda = nlambda,
+                      family = 'gaussian', standardize = TRUE, nfolds = 5)
+  run_pen <- glmnet(x, y, alpha = 1, lambda = cv_pen$lambda,
+                    family = 'gaussian', standardize = TRUE, nfolds = 5)
+  solution_path <- Matrix(run_pen$beta, sparse = TRUE)
+  colnames(solution_path) <- cv_pen$lambda
+  
+  beta.cv <- vector(mode = "list", length = length(cv_pen$lambda))
+
+  for (l in (1:length(cv_pen$lambda))) 
+  {
+    beta.cv[[l]] <- solution_path[,l]
+  }
+  
+  return(list(beta.cv = beta.cv, grid.lambda = cv_pen$lambda, lambda.min = cv_pen$lambda.min, lambda.1se = cv_pen$lambda.1se))
+}
+
+```
+
+```{r}
+# Approach 3:
+logspace <- function(vmax, vmin, ngrid) {
+  lmax <- log(vmax)/log(10)
+  lmin <- log(vmin)/log(10)
+  c <- seq(lmax, lmin, length.out = ngrid)
+  10^c
+}
+
+grid.lambda <- logspace(3,3*0.0001,100)
+
+cv_pen <- cv.glmnet(x, y, alpha = 1, lambda = grid.lambda,
+                    family = 'gaussian', standardize = TRUE, nfolds = 5)
+
+rate <- 1/grid.lambda^2
+
+lasso_reg3 <- function(x,y,x_test, grid.lambda) {
+  cv_pen <- cv.glmnet(x, y, alpha = 1, lambda = grid.lambda,
+                      family = 'gaussian', standardize = TRUE, nfolds = 5)
+  run_pen <- glmnet(x, y, alpha = 1, lambda = cv_pen$lambda,
+                    family = 'gaussian', standardize = TRUE, nfolds = 5)
+  solution_path <- Matrix(run_pen$beta, sparse = TRUE)
+  colnames(solution_path) <- cv_pen$lambda
+  
+  beta.cv <- vector(mode = "list", length = length(cv_pen$lambda))
+
+  for (l in (1:length(cv_pen$lambda))) 
+  {
+    beta.cv[[l]] <- solution_path[,l]
+  }
+  
+  return(list(beta.cv = beta.cv, grid.lambda = cv_pen$lambda, lambda.min = cv_pen$lambda.min, lambda.1se = cv_pen$lambda.1se))
+}
+```
+
+
+
+```{r}
+resLasso <- lasso_reg(x,y_train,x_test)
+str(resLasso)
+
+resLasso2 <- lasso_reg2(x,y_train,x_test)
+
+resLasso3 <- lasso_reg3(x,y_train,x_test, grid.lambda = grid.lambda)
+```
+
+```{r}
+# Prediction
+RMSE <- function(y_test,y.fit) {
+  sqrt(mean(y_test-y.fit-mean(y_test))^2)
+}
+
+list_yfit <- list(resLasso$y.fit)
+
+library(purrr)
+map_dbl(list_yfit, ~RMSE(y_test,.x))
+
+# Variable Selection
+mse <- function(true,fit) {
+  mean(fit-true)^2
+}
+
+bias <- function(true,fit) {
+  mean(abs(fit-true))
+}
+
+PRpair <- function(true,fit) {
+  d <- as.numeric(true != 0)
+  m  <- as.numeric(fit != 0)
+  recall <-  sum(m == 1 & d == 1)/sum(d == 1)
+  precision <- sum(m == 1 & d == 1)/sum(m == 1)
+  return(c(recall, precision))
+}
+```
+
+
+```{r}
+# Approach 1:
+# list_betafit <- list(resLasso$beta.cv, resLasso$beta.debiased)
+```
+
+
+
+```{r}
+# Approach 2:
+list_betafit <- resLasso2$beta.cv
+
+library(purrr)
+MSEdf <- data.frame(MSE = map_dbl(list_betafit, ~mse(beta_true,.x)), lambda = resLasso2$grid.lambda) %>% 
+  mutate(group = case_when(lambda == resLasso2$lambda.min ~ "lambda.min",
+                           lambda == resLasso2$lambda.1se ~ "lambda.1se",
+                           !(lambda %in% c(resLasso2$lambda.min, resLasso2$lambda.1se)) ~ "other")) %>% 
+  mutate(group = factor(group, levels = c("lambda.min", "lambda.1se", "other")))
+
+ggplot(MSEdf, aes(x = lambda, y = MSE, group = group)) +
+  geom_point(aes(color = group))
+
+library(plotly)
+plot_ly(data = MSEdf, x = ~lambda, y = ~MSE, type = 'scatter', color = ~group)
+
+
+
+library(purrr)
+BIASdf <- data.frame(BIAS = map_dbl(list_betafit, ~bias(beta_true,.x)), lambda = resLasso2$grid.lambda) %>% 
+  mutate(group = case_when(lambda == resLasso2$lambda.min ~ "lambda.min",
+                           lambda == resLasso2$lambda.1se ~ "lambda.1se",
+                           !(lambda %in% c(resLasso2$lambda.min, resLasso2$lambda.1se)) ~ "other")) %>% 
+  mutate(group = factor(group, levels = c("lambda.min", "lambda.1se", "other")))
+
+ggplot(BIASdf, aes(x = lambda, y = BIAS, group = group)) +
+  geom_point(aes(color = group))
+
+library(plotly)
+plot_ly(data = BIASdf, x = ~lambda, y = ~BIAS, type = 'scatter', color = ~group)
+
+library(purrr)
+PRdf <- data.frame(do.call('rbind', map(list_betafit, ~PRpair(beta_true,.x)))) %>% 
+  mutate(lambda = resLasso2$grid.lambda) %>% 
+  `names<-` (., c("recall", "precision", "lambda")) %>% 
+    mutate(group = case_when(lambda == resLasso2$lambda.min ~ "lambda.min",
+                           lambda == resLasso2$lambda.1se ~ "lambda.1se",
+                           !(lambda %in% c(resLasso2$lambda.min, resLasso2$lambda.1se)) ~ "other")) %>% 
+  mutate(group = factor(group, levels = c("lambda.min", "lambda.1se", "other"))) %>% 
+  arrange(recall)
+
+auprc <- sum(diff(PRdf$recall)*PRdf$precision[-1])
+
+ggplot(PRdf, aes(x = recall,  y = precision, group = group)) +
+  geom_point(aes(color = group)) +
+  geom_line() +
+  ggtitle(paste0("AUPRC = ", round(auprc,3))) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+library(plotly)
+plot_ly(data = PRdf, x = ~recall, y = ~precision, color = ~group, type = 'scatter', fill = ~'tozeroy') %>% 
+  add_segments(x = 0, xend = 1, y = 1, yend = 0, line = list(dash = "dash", color = "black"), inherit = FALSE, showlegend = FALSE) %>% 
+    layout(title = paste0(paste0("AUPRC = ", round(auprc,3))),
+           xaxis = list(title = "Recall"),
+           yaxis = list(title = "Precision"))
+
+
+plot.coef <- function(fit){
+  df_beta <- data.frame(beta = 1:length(fit), true = beta_true, fit = fit) %>% 
+    gather(method, value, -c("beta")) %>% 
+    mutate(method = factor(method, levels = c("true","fit"))) 
+    
+    
+ggplot(df_beta, aes(x = beta, y = value, group = method)) +
+  geom_bar(aes(fill = method), stat = "identity", position = "identity", alpha = 0.5) +
+  ylim(-4,4)
+}
+
+lapply(list_betafit,plot.coef)
+```
+
+
+```{r}
+# Approach 3:
+list_betafit <- resLasso3$beta.cv
+
+## MSE
+library(purrr)
+MSEdf <- data.frame(MSE = map_dbl(list_betafit, ~mse(beta_true,.x)), lambda = resLasso3$grid.lambda) %>% 
+  mutate(group = case_when(lambda == resLasso3$lambda.min ~ "lambda.min",
+                           lambda == resLasso3$lambda.1se ~ "lambda.1se",
+                           !(lambda %in% c(resLasso3$lambda.min, resLasso2$lambda.1se)) ~ "other")) %>% 
+  mutate(group = factor(group, levels = c("lambda.min", "lambda.1se", "other")))
+
+ggplot(MSEdf, aes(x = lambda, y = MSE, group = group)) +
+  geom_point(aes(color = group))
+
+library(plotly)
+plot_ly(data = MSEdf, x = ~lambda, y = ~MSE, type = 'scatter', color = ~group)
+
+## BIAS
+library(purrr)
+BIASdf <- data.frame(BIAS = map_dbl(list_betafit, ~bias(beta_true,.x)), lambda = resLasso3$grid.lambda) %>% 
+  mutate(group = case_when(lambda == resLasso3$lambda.min ~ "lambda.min",
+                           lambda == resLasso3$lambda.1se ~ "lambda.1se",
+                           !(lambda %in% c(resLasso3$lambda.min, resLasso2$lambda.1se)) ~ "other")) %>% 
+  mutate(group = factor(group, levels = c("lambda.min", "lambda.1se", "other")))
+
+ggplot(BIASdf, aes(x = lambda, y = BIAS, group = group)) +
+  geom_point(aes(color = group))
+
+library(plotly)
+plot_ly(data = BIASdf, x = ~lambda, y = ~BIAS, type = 'scatter', color = ~group)
+```
+
+
+```{r}
+# stan_dat <- list(N_train = nrow(x),
+#                  N_test  = nrow(x_test),
+#                  N_pred  = ncol(x),
+#                  y_train = y_train,
+#                  X_train = x,
+#                  X_test  = x_test)
+# 
+# 
+# library(rstan)
+# bayes_lasso <- stan_model("/Users/duongtrinh/Dropbox/FIELDS/Data Science/R_Data Science/R Practice/BIDuong_ShrinkagePrior/functions/Bayeslasso.stan")
+# 
+# # Fit the model using Stan's NUTS HMC sampler
+# tic()
+# fit_bayes_lasso <- sampling(bayes_lasso, data = stan_dat, iter = 2000, 
+#                             warmup = 500, chains = 1, cores = 3)
+# toc()
+# 
+# # Extract posterior distribution (parameters and predictions)
+# post_lasso <- rstan::extract(fit_bayes_lasso)
+
+```
+
+
+

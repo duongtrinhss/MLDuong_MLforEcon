@@ -1,0 +1,679 @@
+---
+title: "Variable Selection"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: hide
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+fontsize: 10pt
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+
+# Data Generating Process
+
+```{r}
+# Support Packages
+library(tidyverse)
+library(purrr)
+library(ggplot2)
+library(gridExtra)
+```
+
+```{r}
+# Data Generating Process
+# Note: library(pracma) # for a (non-symmetric) Toeplitz matrix
+GenRegr <- function(n,p,options) {
+  # Generate predictors x
+  if (options.corr == 0) {# Uncorrelated predictors
+    x = matrix(rnorm(n*p),n,p)
+  }
+  else if (options.corr == 1) {# Spatially ncorrelated predictors
+    C = toeplitz(options.rho^(0:(p-1)))
+    x = matrix(rnorm(n*p),n,p)%*%chol(C)
+  }
+  else {
+    print('Wrong choice of options.corr')
+  }
+  
+  x <- data.matrix(sapply(data.frame(x), function(x) {(x-mean(x))/sd(x)})) # Standardize x
+  
+  # Generate coefficients
+  beta <- rep(0,p)
+  beta[1:6] <- c(1.5,-1.5,2,-2,2.5,-2.5)
+  
+  if (options.corr == 0) {
+    signal_y <- sum(beta^2)
+  } 
+  else if (options.corr == 1) {
+    signal_y <- sum((chol(C)%*%beta)^2)
+  }
+  
+  c <- signal_y*((1-options.R2)/options.R2) # mean(sigmasq) is c to obtain desirable options.R2 (or SNR)
+  
+  # Generate epsilon
+  if (options.epsilon == 0) { # iid error
+    sigmasq <- c
+  } 
+  else if (options.epsilon == 1) {
+    temp = (x%*%beta)
+    sigmasq = c*temp/mean(temp)
+  }
+  
+  epsilon = sqrt(sigmasq) * rnorm(n)
+  
+  # Generate y
+  y = x%*%beta + epsilon
+  
+  return(list(y = y, x = x, beta = beta, sigmasq = sigmasq))
+}
+```
+
+## DGP 1 - Homoskedasticity, Uncorrelated predictors, Rsquared = 0.4 (n = 100, p = 50)
+
+```{r}
+# Data Generating Process ====
+set.seed(2907)
+n = 100
+p = 50
+options.corr = 0
+options.R2 = 0.4
+options.epsilon = 0
+options.rho = NA
+
+df <- GenRegr(n, p, options)
+
+y <- df$y
+X <- df$x
+beta_true <-  df$beta
+sigmasq_true <- df$sigmasq
+
+df_beta_true <- data.frame(beta = 1:length(beta_true), value = beta_true)
+
+ggplot(df_beta_true, aes(x = beta, y = value)) +
+  geom_bar(fill = "red", stat = "identity", position = "identity", alpha = 0.5)
+```
+
+# Methods
+
+```{r}
+library(Rcpp)
+library(RcppArmadillo)
+sourceCpp("/Users/duongtrinh/Dropbox/FIELDS/Data Science/R_Data Science/R Practice/CPPDuong/BayesRegrSP.cpp")
+
+sourceCpp("/Users/duongtrinh/Dropbox/FIELDS/Data Science/R_Data Science/R Practice/CPPDuong/BayesRegr.cpp")
+```
+
+
+# Simulations
+## Nsim = 1
+
+```{r}
+resRcpp_st <- BayesRegrSP(y,X,nsave=2000,nburn=100,prior="student-t")
+resRcpp_nosp <- BayesRegr(y,X,nsave=2000,nburn=100)
+```
+
+## Nsim = 10
+### Nsim = 10 (Parallel computation)
+
+```{r}
+doOne <- function(n, p, names = FALSE) 
+{
+  df <- GenRegr(n, p, options)
+  y <- df$y
+  X <- df$x
+  beta_true <-  df$beta
+  sigmasq_true <- df$sigmasq
+  
+  nsave <- 2000
+  nburn <-  100
+  
+  beta_est <- array(rep(NA,p*nsave*2),dim = c(p,nsave,2))
+  
+  resRcpp_nosp <- BayesRegr(y,X,nsave=nsave,nburn=nburn)
+  resRcpp_st <- BayesRegrSP(y,X,nsave=nsave,nburn=nburn,prior="student-t")
+  
+  beta_est[,,1] <- resRcpp_nosp$betadraws
+  beta_est[,,2] <- resRcpp_st$betadraws
+  
+  return(beta_est)
+}
+```
+
+```{r}
+n <- 100
+p <- 50
+nsave <- 2000
+Nsim <- 10
+beta_true <- rep(0,p)
+beta_true[1:6] <- c(1.5,-1.5,2,-2,2.5,-2.5)
+
+
+library(parallel)
+library(tictoc)
+tic()
+res1 <- lapply(1:Nsim, function(sim) doOne(n,p))
+toc()
+
+tic()
+res2 <- mclapply(1:Nsim, function(sim) doOne(n,p),
+                 mc.set.seed = TRUE,
+                 mc.cores = getOption("mc.cores", 8L))
+toc()
+
+
+res3 <- array(unlist(res2), 
+              dim = c(p,nsave,2,Nsim),
+              dimnames = list(beta = map_chr(1:p,~paste0("b",.x)),
+                              iter = map_chr(1:nsave,~paste0("iter",.x)),
+                              method = c("NoShrinkage", "CTS-Studt"),
+                              sim = map_chr(1:Nsim,~paste0("sim",.x))))
+  
+library(reshape2)
+res4 <- melt(res3, value.name = "value")
+```
+
+
+# Approach 1 - 2-means (2-M) variable selection
+
+## Reference
+
++ [Variable selection using shrinkage priors](https://www.sciencedirect.com/science/article/pii/S0167947316302353)
+
+## Idea
+
+Doing variable selection using shrinkage priors by post-processing posterior samples of the regression coefficients.
+
+### 2-means (O2M) variable selection
+
+**Algorithm**
+
+### Sequential 2-means (S2M) variable selection
+
+**Algorithm**
+
+Define $S_T$ to be the indices of non-zero signals in $\beta_T$ and $S_E$ to be the indices of the selected covariates.
+
+Consider two types of errors:
+
+  + $\mid S_T \cap S_E^C\mid$: masking error (false negative)
+  + $\mid S_E \cap S_T^C \mid$: swamping error (false positive)
+  
+Let $b > 0$ be a tuning parameter, then *Sequential 2-means (S_2M)* is defined as follows: On the $i^{th}$ MCMC sample of $\beta$:
+
+1. Perform a 2-means algorithm on $\mid \beta_j \mid, j = 1,2,\ldots,p$. Denote the cluster means with smaller values by $m$ and the one with larger values by $M$ ($m < M$). Initialize a set $D$ with all the indices from the cluster with the smaller mean $m$. While the difference $M - m$ is greater than $b$:
+
+  (a) update $D$ to be all the indices from the cluster with the smaller mean $m$;
+  (b) perform a 2-means on $\mid\beta_j\mid, j\in D$;
+  (c) update $m$ and $M$ to be two cluster means ($m \leq M$) obtained from (b).
+  
+2. The set $D$ is considered to contain coefficients of noise covariates. So the estimated number of signals $h_i$ is $p - \mid D\mid$
+
+## Implementation:
+
+```{r}
+O2M <- function(Beta)
+{
+  
+  N=dim(Beta)[1]
+  p=dim(Beta)[2]
+
+  KK = rep(NA,N)
+
+  for (i in 1:N) {
+      fit = kmeans(abs(as.numeric(Beta[i,])),2)
+      KK[i] = min(fit$size)
+  }
+  
+  # Determine the number of non-zeros signals
+  H = as.numeric(names(sort(table(KK), decreasing = TRUE))[1])
+  
+  # Calculate median
+  beta_median = rep(NA, p)
+  for(j in 1:p)
+  {
+    beta_median[j] = median(Beta[,j])
+  }
+  
+  # Find the H largest value
+  sorted = sort(abs(beta_median), decreasing = TRUE, index.return = TRUE)
+  sortedVal = sorted$x
+  sortedInx = sorted$ix
+  
+  topH = sortedInx[1:H]
+  
+  beta_res = rep(0,p)
+  beta_res[topH] = sortedVal[topH]
+
+  return(list(N = N,
+              p = p,
+              H = H,
+              signals = beta_res
+    ))
+}
+```
+
+
+```{r}
+###################
+#S2M main function#
+###################
+
+
+#This function creates a sequence $\{b_i\}$ of $l$ values of the tuning parameter and implements Sequential-2-Means on the posterior samples to obtain variable selection results corresponding to each value in the sequence $\{b_i\}$. }
+#\arguments{
+# \item{Beta}{
+#   it is an $N$ by $p$ matrix consisting of $N$ posterior samples of $p$ variables
+# }
+# \item{lower}{
+#   the lower bound of the chosen values of the tuning parameter
+# }
+# \item{upper}{
+#   the upper bound of the chosen values of the tuning parameter
+# }
+# \item{l}{
+#   the number of chosen values of the tuning parameter
+# }
+
+
+# \value{
+#   \item{N }{the posterior sample size}
+#   \item{p }{the total number of variables}
+#   
+#   \item{H.b.i }{the estimated number of signals corresponding to each $b_i$}
+#   \item{b.i }{the values of the tuning parameter}
+#   
+#   \item{abs.post.median }{medians of the absolute values of the posterior samples of each variable}
+#   
+S2M = function(Beta,lower,upper,l)
+{
+  
+  N=dim(Beta)[1]
+  p=dim(Beta)[2]
+  
+  b.i=seq(lower,upper,length=l)
+  H.b.i=NULL
+  for(r in 1:l)
+  {
+    KK=NULL
+    for (i in 1:N)
+    {
+      fit=kmeans(abs(as.numeric(Beta[i,])),2)
+      cen1=min(fit$centers)
+      cen2=max(fit$centers)
+      temp1=Beta[i,]
+
+      
+      fit1=fit
+      
+      while(cen2-cen1>b.i[r])
+      {
+        fit1=fit
+        temp=which.min(fit$centers)
+        temp1=temp1[which(fit$cluster==temp)]
+        if(length(temp1)<=2){break;}
+        fit=kmeans(abs(as.numeric(temp1)),2)
+        cen2=max(fit$centers)
+        cen1=min(fit$centers)
+      }
+      temp=which.min(fit1$centers)
+      KK[i]=p-length(which(fit1$cluster==temp))
+    }
+    H.b.i[r]=as.numeric(names(sort(-table(KK)))[1])
+  }
+  abs.post.median=NULL
+  for(i in 1:p)
+  {
+    abs.post.median[i]=median(abs(Beta[,i]))
+  }
+  return(list(N=N,
+              p=p,
+              H.b.i=H.b.i,
+              b.i=b.i,
+              abs.post.median=abs.post.median
+    ))
+}
+
+
+
+############################
+#make a H_b_i v.s. b_i plot#
+############################
+#This function is to make the $H_{b_{i}}$-v.s.-$b_i$ plot. The estimated number of signals, or equivalently, the optimal value of the tuning parameter can be decided by looking at this plot.
+# \arguments{
+#   \item{S2M}{a list obtained from the function \code{S2M}.}
+# }
+Hbi.vs.bi=function(S2M)
+{
+  plot(S2M$b.i,S2M$H.b.i)
+}
+
+
+
+
+###############################
+#variable selection results   #
+#given a particular value of H#
+###############################
+#This function is to print out the variable selection results given the estimated number of signals.}
+# \arguments{
+#   \item{S2M}{a list obtained from the function \code{S2M}.}
+#   \item{H}{the estimated number of signals}
+# }
+# \value{
+#   \item{var.selected}{The indices of selected variables}
+#  }
+
+S2M.vs=function(S2M,H)
+{
+  p=S2M$p
+  abs.post.median=S2M$abs.post.median
+  var.selected=order(abs.post.median)[p:(p-H+1)]
+  return(var.selected)
+}
+```
+
+```{r}
+resRcpp <- resRcpp_nosp
+beta_post <- data.frame(t(resRcpp$betadraws))
+resO2M <- O2M(beta_post)
+resO2M
+
+# resS2M <- S2M(beta_post,0,1,100)
+# Hbi.vs.bi(resS2M)
+# S2M.vs(resS2M,6)
+```
+
+
+```{r}
+resRcpp <- resRcpp_st
+beta_post <- data.frame(t(resRcpp$betadraws))
+resO2M <- O2M(beta_post)
+resO2M
+
+resS2M <- S2M(beta_post,0,1,100)
+Hbi.vs.bi(resS2M)
+S2M.vs(resS2M,6)
+```
+
+# Approach 2 - Using AUPRC
+
+## Reference:
+
++ [Comparing methods for statistical inference with model uncertainty](https://www.pnas.org/doi/pdf/10.1073/pnas.2120737119)
+
+## Ideas:
+
+To compare the performance of the techniques for identifying the appropriate variables, we calculated the area under the precision recall curve (AUPRC) for each of the techniques. This gives an overall assessment of model selection quality and does not require a threshold to be chosen for the posterior inclusion probability of a covariate.
+
++ For the horseshoe, the AUPRC was obtained by varying the credible set levels leading to different number of variables being selected by the method. 
+
++ For penalized likelihood based approaches, the AUPRC was obtained b varying the cross-validation parameterλfrom close to 0 (no penalization) to $\lambda_{max}$, defined as the smallest value of $\lambda$ for which none of the variables is included
+in the model. 
+
++ We report Inference with (1 – AUPRC) as our metric, and a lower value is better.
+
+## Implementation:
+
+### Nsim = 1
+
+**No Shrinkage**
+
+```{r}
+# resRcpp <- resRcpp_st
+resRcpp <- resRcpp_nosp
+
+names_beta <- map_chr(1:nrow(resRcpp$betadraws),~paste0(.x))
+
+df_beta <- data.frame(t(resRcpp$betadraws)) %>%
+  `names<-`(.,names_beta) %>% 
+  mutate(nsave = 1:ncol(resRcpp$betadraws)) %>% 
+  gather(., beta, value, -c("nsave")) %>% 
+  mutate(beta = factor(beta, level = names_beta))
+```
+
+```{r}
+df_beta2 <- df_beta %>% group_by(beta) %>% 
+  summarise(ub = quantile(value,0.95),
+            lb = quantile(value,0.05),
+            UB = quantile(value,0.75),
+            LB = quantile(value,0.25),
+            m = median(value)) %>% 
+  mutate(true = beta_true, beta = 1:p)
+
+ggplot(df_beta2, aes(x = beta, y = m)) +
+  geom_point(size = 1, col = "blue") +
+  geom_point(aes(x = beta, y = true), size = 1, col = "red", shape = 2) +
+  geom_linerange(aes(ymin = LB, ymax = UB), size=1, alpha = 0.5) +
+  geom_linerange(aes(ymin = lb, ymax = ub), size=0.3, alpha = 0.5) +
+  xlab("beta") +
+  ylab("value") +
+  ggtitle("Posterior median with 50% and 90% credible intervals") +
+  # coord_flip() +
+  theme(plot.background = element_rect(fill = "transparent", colour = NA)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+PRpair <- function(th) {
+  df_beta %>% group_by(beta) %>% 
+    summarise(ub = quantile(value, 0.5 + th/2),
+              lb = quantile(value, 0.5 - th/2),
+              m = as.numeric(lb > 0 | ub < 0)) %>% 
+    select(m) %>% 
+    mutate(d = as.numeric(beta_true != 0)) %>% 
+    summarise(TP = sum(m == 1 & d == 1),
+            FP = sum(m == 1 & d == 0),
+            FN = sum(m == 0 & d == 1),
+            precision = case_when(TP + FP == 0 ~ 0,
+                                  TP + FP != 0 ~ TP/(TP + FP)),
+            recall = TP/(TP + FN)) %>% 
+    select(precision, recall, TP, FP, FN)
+}
+
+grid.th <- seq(0.99,0.01,-0.01)
+
+library(purrr)
+PRdf <- do.call('rbind', map(grid.th, PRpair)) %>% arrange(recall)
+
+auprc <- sum(diff(PRdf$recall)*PRdf$precision[-1])
+
+ggplot(PRdf, aes(x = recall, y = precision)) +
+  geom_point() +
+  geom_line() +
+  ggtitle(paste0("AUPRC = ", round(auprc,3))) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+**CTS-Studt prior**
+```{r}
+resRcpp <- resRcpp_st
+# resRcpp <- resRcpp_nosp
+
+names_beta <- map_chr(1:nrow(resRcpp$betadraws),~paste0(.x))
+
+df_beta <- data.frame(t(resRcpp$betadraws)) %>%
+  `names<-`(.,names_beta) %>% 
+  mutate(nsave = 1:ncol(resRcpp$betadraws)) %>% 
+  gather(., beta, value, -c("nsave")) %>% 
+  mutate(beta = factor(beta, level = names_beta))
+```
+
+```{r}
+df_beta2 <- df_beta %>% group_by(beta) %>% 
+  summarise(ub = quantile(value,0.95),
+            lb = quantile(value,0.05),
+            UB = quantile(value,0.75),
+            LB = quantile(value,0.25),
+            m = median(value)) %>% 
+  mutate(true = beta_true, beta = 1:p)
+
+ggplot(df_beta2, aes(x = beta, y = m)) +
+  geom_point(size = 1, col = "blue") +
+  geom_point(aes(x = beta, y = true), size = 1, col = "red", shape = 2) +
+  geom_linerange(aes(ymin = LB, ymax = UB), size=1, alpha = 0.5) +
+  geom_linerange(aes(ymin = lb, ymax = ub), size=0.3, alpha = 0.5) +
+  xlab("beta") +
+  ylab("value") +
+  ggtitle("Posterior median with 50% and 90% credible intervals") +
+  # coord_flip() +
+  theme(plot.background = element_rect(fill = "transparent", colour = NA)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+PRpair <- function(th) {
+  df_beta %>% group_by(beta) %>% 
+    summarise(ub = quantile(value, 0.5 + th/2),
+              lb = quantile(value, 0.5 - th/2),
+              m = as.numeric(lb > 0 | ub < 0)) %>% 
+    select(m) %>% 
+    mutate(d = as.numeric(beta_true != 0)) %>% 
+    summarise(TP = sum(m == 1 & d == 1),
+            FP = sum(m == 1 & d == 0),
+            FN = sum(m == 0 & d == 1),
+            precision = case_when(TP + FP == 0 ~ 0,
+                                  TP + FP != 0 ~ TP/(TP + FP)),
+            recall = TP/(TP + FN)) %>% 
+    select(precision, recall, TP, FP, FN)
+}
+
+grid.th <- seq(0.99,0.01,-0.01)
+
+library(purrr)
+PRdf <- do.call('rbind', map(grid.th, PRpair)) %>% arrange(recall)
+
+auprc <- sum(diff(PRdf$recall)*PRdf$precision[-1])
+
+ggplot(PRdf, aes(x = recall, y = precision)) +
+  geom_point() +
+  geom_line() +
+  ggtitle(paste0("AUPRC = ", round(auprc,3))) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### Nsim = 10
+
+```{r}
+names_method <- c("NoShrinkage", "CTS-Studt")
+names_sim <- map_chr(1:Nsim,~paste0("sim",.x))
+mat_auprc <- matrix(NA, 2, Nsim)
+mat_recall <- matrix(NA, 2, Nsim)
+mat_precision <- matrix(NA, 2, Nsim)
+mat_TP <- matrix(NA, 2, Nsim)
+mat_FP <- matrix(NA, 2, Nsim)
+mat_FN <- matrix(NA, 2, Nsim)
+
+for (i in 1:2) {
+for (j in 1:Nsim) {
+
+resdf <- res4 %>% filter(sim == names_sim[j], method == names_method[i]) %>% 
+  select(beta, value)
+
+PRpair <- function(th) {
+  resdf %>% group_by(beta) %>% 
+    summarise(ub = quantile(value, 0.5 + th/2),
+              lb = quantile(value, 0.5 - th/2),
+              m = as.numeric(lb > 0 | ub < 0)) %>% 
+    select(m) %>% 
+    mutate(d = as.numeric(beta_true != 0)) %>% 
+    summarise(TP = sum(m == 1 & d == 1),
+            FP = sum(m == 1 & d == 0),
+            FN = sum(m == 0 & d == 1),
+            precision = case_when(TP + FP == 0 ~ 0,
+                                  TP + FP != 0 ~ TP/(TP + FP)),
+            recall = TP/(TP + FN)) %>% 
+    select(precision, recall, TP, FP, FN)
+}
+
+grid.th <- seq(0.99,0.01,-0.01)
+
+library(purrr)
+PRdf <- do.call('rbind', map(grid.th, PRpair)) %>% arrange(recall)
+
+# ggplot(PRdf, aes(x = recall, y = precision)) +
+#   geom_point() + 
+#   geom_line()
+
+auprc <- sum(diff(PRdf$recall)*PRdf$precision[-1])
+mat_auprc[i, j] <- auprc
+mat_recall[i, j] <- mean(PRdf$recall)
+mat_precision[i, j] <- mean(PRdf$precision)
+mat_TP[i, j] <- mean(PRdf$TP)
+mat_FP[i, j] <- mean(PRdf$FP)
+mat_FN[i, j] <- mean(PRdf$FN)
+}
+}
+
+meanAUPRC <- rowMeans(mat_auprc)
+meanRECALL <- rowMeans(mat_recall)
+meanPRECISION <- rowMeans(mat_precision)
+meanTP <- rowMeans(mat_TP)
+meanFP <- rowMeans(mat_FP)
+meanFN <- rowMeans(mat_FN)
+
+knitr::kable(data.frame(names_method, meanTP, meanFP, meanFN, meanPRECISION, meanRECALL, meanAUPRC))
+```
+
+# Approach 3 - Using reference models in variable selection
+
+## Reference:
+
++ Decoupling Shrinkage and Selection 
++ [Projective inference in high-dimensional problems: Prediction and feature selection](https://projecteuclid.org/journals/electronic-journal-of-statistics/volume-14/issue-1/Projective-inference-in-high-dimensional-problems--Prediction-and-feature/10.1214/20-EJS1711.full)
++ [Using reference models in variable selection](https://link.springer.com/article/10.1007/s00180-022-01231-6)
+
+## Ideas
+
+**Rich model vs Feature selection**
+
++ If we care about the predictive performance
+  + Include all available prior information
+  + Integrate over all uncertainties
+  + No need for feature selection
+
++ Variable selection can be useful if
+  + need to reduce measurement or computation cost
+  + improve explainability
+
++ Two options for variable selection
+  + Find a minimal subset of feature that yield a good predictive model
+  + Identify all features that have predictive information (complete variable selection)
+
+
+**Why shrinkage priors alone do not solve the variable selection problem**
+
++ A common strategy:
+  + Fit model with a shrinkage prior
+  + Select variables based on marginal posteriors of the regression coefficients
+  
+**Issues**
+  + Marginal posteriors are difficult with correlated features
+  + How to do posterior inference correctly
+  
+## Two stage approach
+
++ Construct a best predictive model we can -> reference model
++ Variable selection and post-selection inference -> projection
+
+## Implementation:
+

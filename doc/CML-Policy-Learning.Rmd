@@ -1,0 +1,150 @@
+---
+title: "CML-Policy-Learning"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: show
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+bibliography: MLrefs.bib
+fontsize: 10pt
+keywords: average treatment effect; machine learning; microeconometrics
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+
+# Policy Learning:
+
++ @zhou2022offline: [paper](https://pubsonline.informs.org/doi/abs/10.1287/opre.2022.2271)
++ @athey2021policy: [paper](https://onlinelibrary.wiley.com/doi/full/10.3982/ECTA15732)
++ [policytree - Policy learning via doubly robust empirical welfare maximization over trees](https://joss.theoj.org/papers/10.21105/joss.02232.pdf)
+
+Setup
+
++ Policy $\pi: \mathcal{X} \rightarrow \{\pm 1\}$
++ Given a class of policies $\Pi$. the optimal policy $\pi^*$ and the regret $R(\pi)$ of any other policy are respectively defined as:
+
+$$
+\pi^* = \text{argmax}_{\pi \in \Pi}\{E[Y_i(\pi(X_i))]\}
+$$
+$$
+R(\pi) E[Y_i(\pi^*(X_i))] - E[Y_i(\pi(X_i))]
+$$
+
++ Goal: estimate a policy $\pi$ that minimizes regret $R(\pi)$
+
++ Approach: Estimate $Q(\pi)$, choose policy to minimize $\hat{Q}(\pi)$:
+$$
+Q(\pi) = E[Y_i(\pi(X_i))] - \frac{1}{2}E[Y_i(-1)+Y_i(+1)]
+$$
+$$
+\hat{\pi} = \text{argmax}_{\pi \in \Pi}\{\hat{Q}(\pi)\}
+$$
+
+
+
+# Lab:
+
++ [`policytree' Introduction](https://grf-labs.github.io/policytree/articles/policytree.html)
+
+```{r}
+# install_pkgs(c("grf","causalforest","policytree","GenericML"))
+library(grf)
+library(policytree)
+```
+
+## Ex. 1: Binary treatment effect estimation and policy learning
+```{r}
+n <- 10000
+p <- 10
+
+X <- matrix(rnorm(n * p), n, p)
+ee <- 1 / (1 + exp(X[, 3]))
+tt <- 1 / (1 + exp((X[, 1] + X[, 2]) / 2)) - 0.5
+W <- rbinom(n, 1, ee)
+Y <- X[, 3] + W * tt + rnorm(n)
+```
+
+# Data preparation
+
+```{r}
+library("dplyr")
+library("stringr")
+library("readr")
+library("forcats")
+dta <- read.csv("/Users/duongtrinh/Dropbox/FIELDS/Machine Learning/Courses/[2022] SGPE Summer School/Tutorials/8_PolicyTree/GerberGreenLarimer_APSR_2008_social_pressure.csv")
+dta <- dta %>% mutate(voted = voted == "Yes",
+                      male = sex == "male",
+                      female = sex == "female")
+
+dta <- dta %>% 
+  group_by(hh_id) %>% 
+  summarise(
+    voted = max(voted),
+    treatment = first(treatment),
+    hh_size = n(),
+    female = sum(female),
+    yob = mean(yob),
+    g2000 = max(g2000),
+    g2002 = max(g2002),
+    g2004 = max(g2004),
+    p2000 = max(p2000),
+    p2002 = max(p2002),
+    p2004 = max(p2004)
+  ) %>% 
+  ungroup()
+
+dta <- dta %>% 
+  mutate(treatment = str_trim(treatment),
+         treatment = factor(treatment),
+         treatment = fct_relevel(treatment,
+                                 "Control", "Civic Duty", "Hawthorne", "Self", "Neighbors"))
+
+```
+
+
+```{r}
+set.seed(563)
+# random split
+train <- sample(c(TRUE, FALSE), replace = TRUE, prob = c(0.3,0.7), size = nrow(dta))
+# training data
+X <- as.matrix(dta[train,c(4:12)])
+Y <- dta$voted[train]
+W <- dta$treatment[train]
+# test data
+X0 <- as.matrix(dta[!train,c(4:12)])
+Y0 <- dta$voted[!train]
+W0 <- dta$treatment[!train]
+```
+
+```{r}
+dta %>% 
+  group_by(treatment) %>% 
+  summarise(count = n()) %>% 
+  mutate(share = count/sum(count))
+```
+
+# Treatment Effects OLS
+```{r}
+summary(lm(voted~treatment, data = dta[train,]))
+```
+
+
+# Reference {-}
+

@@ -1,0 +1,185 @@
+---
+title: "Introduction-to-Machine-Learning"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: show
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+bibliography: MLrefs.bib
+fontsize: 10pt
+---
+
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+# Foundation
+
+## Terminology
++ **Machine Learning**
++ **Statistical Learning**
++ **Deep Learning**
+
+## Supervised & Unsupervised ML
+
+
+## Principles
+
+### Bias-Variance trade-off
+
++ AIC:loss efficient
++ BIC: model selection consistent
+
+### Validation
+
+Training sample
+
+Test sample,  validation sample/ holdout sample
+
++ **Sample splitting**
+
++ **K-fold Cross Validation**
+
++ **Cross-validation and data leakage**
+
+```{r}
+n <-150
+p <-  200
+
+x <- matrix(rnorm(n*p),n,p)
+y <- rbinom(n, size = 1, prob = 0.5)
+table(y)
+
+rho <- 0.6
+
+C <- toeplitz(rho^c(0:(p-1)))
+
+p <-  4
+
+```
+
+
+```{r}
+library(glmnet)
+```
+
+
+# Parallelization
+
+```{r}
+# install.packages("doParallel")
+library(doParallel)
+library(caret)
+BostonHousing <-  MASS::Boston
+
+# Counts the number if cores on your machine
+K <- parallel::detectCores()
+
+# This registers each core as member of a computing cluster
+cl <- makeCluster(K)
+registerDoParallel(cl)
+
+library(tictoc)
+tic()
+set.seed(123)
+m <- train(medv ~ ., data = BostonHousing,
+           method = "glmboost",
+           trControl = trainControl(allowParallel = TRUE)
+           )
+toc()
+m
+
+
+set.seed(123)
+tic()
+m <- train(medv ~ ., data = BostonHousing,
+           method = "glmboost",
+           trControl = trainControl(allowParallel = FALSE)
+           )
+toc()
+m
+
+# Once you finished, you deactivate the cluster with these two commands
+stopCluster(cl)
+registerDoSEQ()
+```
+
+## Example 1: The Birthday problem
+
+## Example 2: Boostrap
+
+```{r}
+BostonHousing <- MASS::Boston
+
+start <- Sys.time()
+iter <- 10000
+b <- rep(NA,iter)
+for (i in 1:iter) {
+  fit <- lm(medv~.,data=BostonHousing[sample(1:nrow(BostonHousing),replace=TRUE),])
+  b[i] <- coef(fit)["crim"]
+}
+end <- Sys.time()
+end-start
+
+hist(b)
+
+library("doParallel")
+# Counts the number of cores on your machine 
+K <- parallel::detectCores()
+
+# This registers each core as a member of a 
+# computing cluster 
+cl <- makeCluster(K)
+registerDoParallel(cl)
+
+start <- Sys.time()
+iter <- 10000
+b <- list()
+b <- foreach (i = 1:iter) %dopar% {
+    fit <- lm(medv~.,data=BostonHousing[sample(1:nrow(BostonHousing),replace=TRUE),])
+    coef(fit)["crim"]
+}
+end <- Sys.time()
+end-start
+b <- unlist(b)
+hist(b)
+
+stopCluster(cl)
+registerDoSEQ()
+```
+
+
+## Prerequisites
+```{r, message=FALSE}
+# Helper packages
+library(dplyr)     # for data manipulation
+library(ggplot2)   # for awesome graphics
+
+# Modeling process packages
+library(rsample)   # for resampling procedures
+library(caret)     # for resampling and model training
+library(h2o)       # for resampling and model training
+
+# h2o set-up 
+# h2o.no_progress()  # turn off h2o progress bars
+# h2o.init()         # launch h2o
+```
+
+
+
+

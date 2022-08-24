@@ -1,0 +1,72 @@
+---
+title: "Unsupervised Learning"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: hide
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+fontsize: 10pt
+---
+
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+
+# K-means Clustering
+
+We want to partition the data into $K$ clusters such that the total within-cluster variation (WCV), summed over all $K$ clusters, is a small as possible. Formally:
+
+$$
+min \left\{ \sum_{k=1}^K WCV (C_k)\right\}
+$$
+
+using Euclidean distance:
+
+$$
+WCV (C_k) = \frac{1}{n_k} \sum_{i,i'\in C_k}\sum_{j=1}^p (x_{ij} - x_{i'j})^2
+$$
+
+Minimizing the objective function is not trivial. There is a simple algorithm available.
+
+  1. Randomly assign each observation to a cluster 1 to K.
+  
+  2. Compute the cluster centroid.
+  
+  3. Assign each observations to the cluster whose centroid is closest.
+  
+  4. Repeat 2.- 3. until cluster assignment doesn’t change. But the algorithm is not guaranteed to find the global minimum. Thus one should check different starting values.
+
+# Lab SGPE
+
+```{r, warning=FALSE, message=FALSE}
+load("/Users/duongtrinh/Dropbox/FIELDS/Machine Learning/Courses/[2022] SGPE Summer School/Tutorials/9_Unsupervised/Lab_unsupervised_data.RData")
+
+library(tidyverse)
+
+data.wide <- data %>% 
+  pivot_wider(id_cols = c(Country.Name.x, Country.Code),
+               values_from = `Indicator Value`, names_from = Indicator)
+
+# remove missing variables
+data <- na.omit(data.wide)
+```
+
+
+
+

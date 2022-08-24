@@ -1,0 +1,297 @@
+---
+title: "CML-Average-Treatment-Effect"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: show
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+bibliography: MLrefs.bib
+fontsize: 10pt
+keywords: average treatment effect; machine learning; microeconometrics
+---
+
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+
+# Foundation
+
+## Double/De-biased Machine Learning: DML
+
+## DR with Machine Leaning: TMLE
+
+
+# Lab 1: Impact of 401(k) on Financial Wealth
+
+Reference: [DoubleML-Example](https://docs.doubleml.org/stable/examples/R_double_ml_pension.html)
+
+In this real-data example, we illustrate how the [DoubleML](https://docs.doubleml.org/stable/index.html) package can be used to estimate the effect of 401(k) eligibility and participation on accumulated assets. The 401(k) data set has been analyzed in several studies, among others [Chernozhukov et al. (2018)](https://arxiv.org/abs/1608.00060).
+
+401(k) plans are pension accounts sponsored by employers. The key problem in determining the effect of participation in 401(k) plans on accumulated assets is saver heterogeneity coupled with the fact that the decision to enroll in a 401(k) is non-random. It is generally recognized that some people have a higher preference for saving than others. It also seems likely that those individuals with high unobserved preference for saving would be most likely to choose to participate in tax-advantaged retirement savings plans and would tend to have otherwise high amounts of accumulated assets. The presence of unobserved savings preferences with these properties then implies that conventional estimates that do not account for saver heterogeneity and endogeneity of participation will be biased upward, tending to overstate the savings effects of 401(k) participation.
+
+One can argue that eligibility for enrolling in a 401(k) plan in this data can be taken as exogenous after conditioning on a few observables of which the most important for their argument is income. The basic idea is that, at least around the time 401(k)’s initially became available, people were unlikely to be basing their employment decisions on whether an employer offered a 401(k) but would instead focus on income and other aspects of the job.
+
+## Data
+```{r, message=FALSE}
+# Load required packages for this tutorial
+library(DoubleML)
+library(mlr3)
+library(mlr3learners)
+library(data.table)
+library(knitr)
+library(ggplot2)
+library(gridExtra)
+
+# suppress messages during fitting
+lgr::get_logger("mlr3")$set_threshold("warn")
+
+# load data as a data.table
+data <- fetch_401k(return_type = "data.table", instrument = TRUE)
+dim(data)
+str(data)
+```
+
+The data consist of 9,915 observations at the household level drawn from the 1991 Survey of Income and Program Participation (SIPP). All the variables are referred to 1990. We use net financial assets (*net_tfa*) as the outcome variable, , in our analysis. The net financial assets are computed as the sum of IRA balances, 401(k) balances, checking accounts, saving bonds, other interest-earning accounts, other interest-earning assets, stocks, and mutual funds less non mortgage debts.
+
+Among the $9915$ individuals, $3682$ are eligible to participate in the program. The variable *e401* indicates eligibility and *p401* indicates participation, respectively.
+
+
+```{r}
+hist_e401 <-  ggplot(data, aes(x = e401, fill = factor(e401))) +
+            geom_bar() + theme_minimal() +
+            ggtitle("Eligibility, 401(k)") +
+            theme(legend.position = "bottom", plot.title = element_text(hjust = 0.5),
+                  text = element_text(size = 10))
+
+hist_p401 <-  ggplot(data, aes(x = p401, fill = factor(p401))) +
+            geom_bar() + theme_minimal() +
+            ggtitle("Participation, 401(k)") +
+            theme(legend.position = "bottom", plot.title = element_text(hjust = 0.5),
+                  text = element_text(size = 10))
+
+grid.arrange(hist_e401, hist_p401, ncol = 2)
+```
+
+Eligibility is highly associated with financial wealth:
+
+```{r}
+dens_net_tfa_e <- ggplot(data, aes(x = net_tfa, color = factor(e401), fill = factor(e401)) ) +
+                    geom_density() + xlim(c(-20000, 150000)) +
+                    facet_wrap(.~e401)  + theme_minimal() +
+                    theme(legend.position = "bottom", text = element_text(size = 10))
+
+dens_net_tfa_e
+
+dens_net_tfa_p <- ggplot(data, aes(x = net_tfa, color = factor(p401), fill = factor(p401)) ) +
+                    geom_density() + xlim(c(-20000, 150000)) +
+                    facet_wrap(.~p401)  + theme_minimal() +
+                    theme(legend.position = "bottom", text = element_text(size = 10))
+
+dens_net_tfa_p
+```
+
+As a first estimate, we calculate the unconditional average predictive effect (APE) of 401(k) eligibility on accumulated assets. This effect corresponds to the average treatment effect if 401(k) eligibility would be assigned to individuals in an entirely randomized way. The unconditional APE of *e401* is about $19559$
+
+```{r}
+APE_e401_uncond = data[e401==1, mean(net_tfa)] - data[e401==0, mean(net_tfa)]
+round(APE_e401_uncond, 2)
+```
+
+Among the $3682$ individuals that are eligible, $2594$ decided to participate in the program. The unconditional APE of *p401* is about :
+
+```{r}
+table(data$e401, data$p401)
+```
+
+
+```{r}
+APE_p401_uncond = data[p401==1, mean(net_tfa)] - data[p401==0, mean(net_tfa)]
+round(APE_p401_uncond, 2)
+```
+
+
+As discussed, these estimates are biased since they do not account for saver heterogeneity and endogeneity of participation.
+
+## Estimating the Average Treatment Effect of 401(k) Eligibility on Net Financial Assets
+
+### The Data Backend: DoubleMLData {-}
+```{r}
+# Set up basic model: Specify variables for data-backend
+features_base = c("age", "inc", "educ", "fsize",
+                  "marr", "twoearn", "db", "pira", "hown")
+
+# Initialize DoubleMLData (data-backend of DoubleML)
+data_dml_base = DoubleMLData$new(data,
+                                 y_col = "net_tfa",
+                                 d_cols = "e401",
+                                 x_cols = features_base)
+data_dml_base
+```
+```{r}
+# Set up a model according to regression formula with polynomials
+formula_flex = formula(" ~ -1 + poly(age, 2, raw=TRUE) +
+                        poly(inc, 2, raw=TRUE) + poly(educ, 2, raw=TRUE) +
+                        poly(fsize, 2, raw=TRUE) + marr + twoearn +
+                        db + pira + hown")
+features_flex = data.frame(model.matrix(formula_flex, data))
+
+model_data = data.table("net_tfa" = data[, net_tfa],
+                        "e401" = data[, e401],
+                        features_flex)
+
+# Initialize DoubleMLData (data-backend of DoubleML)
+data_dml_flex = DoubleMLData$new(model_data,
+                                 y_col = "net_tfa",
+                                 d_cols = "e401")
+
+data_dml_flex
+```
+
+### Partially Linear Regression Model (PLR)
+We start using lasso to estimate the function $g_0$ and $m_0$ in the following PLR model
+
+$$
+Y = D\theta_0 + g_0(X) +\zeta, \quad E[\zeta \mid D, X] = 0,
+$$
+
+$$
+D = m_0(X) + V, \quad E[V \mid X] = 0.
+$$
+
+To estimate the causal parameter $\theta_0$ here, we use double machine learning with 3-fold cross-fitting.
+
+Estimation of the nuisance components $g_0$ and $m_0$, is based on the lasso with cross-validated choice of the penalty term, $\lambda$, as provided by the glmnet package. We load the learner by using the mlr3 function lrn(). Hyperparameters and options can be set during instantiation of the learner. Here we specify that the lasso should use that value of  that minimizes the cross-validated mean squared error which is based on 5-fold cross validation.
+
+We start by estimation the ATE in the basic model and then repeat the estimation in the flexible model.
+
+```{r, message=FALSE}
+library(glmnet)
+```
+
+```{r}
+# Initialize learners
+set.seed(123)
+lasso <- lrn("regr.cv_glmnet", nfolds = 5, s = "lambda.min")
+lasso_class <-  lrn("classif.cv_glmnet", nfolds = 5, s = "lambda.min")
+
+# Initialize DoubleMLPLR model
+dml_plr_lasso <-  DoubleMLPLR$new(data_dml_base,
+                                  ml_l = lasso,
+                                  ml_m = lasso_class,
+                                  n_fold = 3)
+dml_plr_lasso$fit()
+dml_plr_lasso$summary()
+```
+
+Alternatively, we can repeat this procedure with other machine learning methods, for example a random forest learner as provided by the `ranger' package for R.
+
+```{r, message=FALSE}
+library(ranger)
+```
+
+```{r}
+## Random Forest
+randomForest = lrn("regr.ranger", max.depth = 7,
+                   mtry = 3, min.node.size = 3)
+randomForest_class = lrn("classif.ranger", max.depth = 5,
+                         mtry = 4, min.node.size = 7)
+
+set.seed(123)
+dml_plr_forest = DoubleMLPLR$new(data_dml_base,
+                                 ml_l = randomForest,
+                                 ml_m = randomForest_class,
+                                 n_folds = 3)
+dml_plr_forest$fit()
+dml_plr_forest$summary()
+```
+
+Now, let’s use a regression tree as provided by the R package `rpart'.
+
+```{r}
+library(rpart)
+```
+
+
+```{r}
+# Trees
+trees = lrn("regr.rpart", cp = 0.0047, minsplit = 203)
+trees_class = lrn("classif.rpart", cp = 0.0042, minsplit = 104)
+
+set.seed(123)
+dml_plr_tree = DoubleMLPLR$new(data_dml_base,
+                               ml_l = trees,
+                               ml_m = trees_class,
+                               n_folds = 3)
+dml_plr_tree$fit()
+dml_plr_tree$summary()
+```
+
+We can also experiment with extreme gradient boosting as provided by `xgboost'.
+
+```{r, message=FALSE}
+library(xgboost)
+```
+
+```{r}
+# Boosted trees
+boost = lrn("regr.xgboost",
+            objective = "reg:squarederror",
+            eta = 0.1, nrounds = 35)
+boost_class = lrn("classif.xgboost",
+                  objective = "binary:logistic", eval_metric = "logloss",
+                  eta = 0.1, nrounds = 34)
+
+set.seed(123)
+dml_plr_boost = DoubleMLPLR$new(data_dml_base,
+                                ml_l = boost,
+                                ml_m = boost_class,
+                                n_folds = 3)
+dml_plr_boost$fit()
+dml_plr_boost$summary()
+```
+
+Let’s sum up the results:
+
+```{r, fig.align='center'}
+confints <-  rbind(dml_plr_lasso$confint(), dml_plr_forest$confint(),
+                 dml_plr_tree$confint(), dml_plr_boost$confint())
+estimates <-  c(dml_plr_lasso$coef, dml_plr_forest$coef,
+              dml_plr_tree$coef, dml_plr_boost$coef)
+result_plr <-  data.table("model" = "PLR",
+                        "ML" = c("glmnet", "ranger", "rpart", "xgboost"),
+                        "Estimate" = estimates,
+                        "lower" = confints[,1],
+                        "upper" = confints[,2])
+knitr::kable(result_plr)
+```
+
+```{r, fig.align='center'}
+g_ci  <-  ggplot(result_plr, aes(x = ML, y = Estimate, color = ML)) +
+        geom_point() +
+        geom_errorbar(aes(ymin = lower, ymax = upper, color = ML))  +
+        geom_hline(yintercept = 0, color = "grey") +
+        theme_minimal() + ylab("Coefficients and 0.95- confidence interval") +
+        xlab("") +
+        theme(axis.text.x = element_text(angle = 90), legend.position = "none",
+              text = element_text(size = 10))
+
+g_ci
+```
+
+### Interactive Regression Model (IRM) {-}

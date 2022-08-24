@@ -1,0 +1,124 @@
+---
+title: "Deep-Learning"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    number_sections: true
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    code_folding: hide
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+options(knitr.duplicate.label = "allow")
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+
+# Deep Neural Networks (DNNs)
+
+## Setup
+
++ Deep learning is (regularized) maximum likelihood, for regressions with complicated
+functional forms.
+
++ Find $\theta$ to minimize
+
+$$
+\mathbbm E[(Y - f(X,\theta))^2]
+$$
+for continuous outcomes $Y$, or to maximize
+
+$$
+\mathbbm E\left[\sum_{y}\mathbbm{1}(Y = y).f^{y}(X,\theta)\right]
+$$
+for discrete outcomes $Y$.
+
+
+### What’s deep about that? {-}
+
+#### Feedforward nets (FFNN) or multilayer perception (MLP) {-}
+
++ Functions $f$ used for deep (feedforward) nets can be written as
+$$
+f(\mathbf x, \theta) = f^k(f^{k-1}(...f^1(\mathbbm x, \theta^1), \theta^2),..., \theta^k)
+$$
++ Biological analogy:
+  + Each value of a component of $f^j$ corresponds to the "activation" of a "neuron"
+  + Each $f^j$ corresponds to a layer of the net: Many layers $\rightarrow$ "deep neural net"
+  + The layer-structure and the parameters $\theta$ determine how these neurons are connected
+  
++ Inspired by biology, but practice moved away from biological models.
+
++ Best to think of as a class of nonlinear functions for regression.
+
+### So what's new? {-}
+
++ Very non-linear functional forms $f$.
++ Often more parameters than observations.
++ Lots of computational challenges.
+
+# Network design
+## Activation functions
+
++ Basic unit of a net: a neuron $i$ in layer $j$
++ Receives input vector $x_i^j$ (output of other neurons).
++ Produces output $g(x_i^{j}\theta_i^j + \eta_i^j)$
++ Activation function $g(.)$:
+  + Older nets: Sigmoid function (biologically inspired)
+  + Modern nets: "Rectified linear units:" $g(z) = max(0,z).$ $\rightarrow$ more convenient for getting gradients.
+  
+
+## Architecture
++ These neurons are connected, usually structred by layers
+  + Number if layers: Depth
+  + Number of neurons in a layer: Width
++ Input layer: Regressors
++ Output layer: Outcome variables
++ Suppose each layer is fully connected to the next, and we are using RELU activation
+functions.
++ Then we can write in matrix notation (using componentwise max):
+
+$$
+\mathbf x^j = f^j(\mathbf x^{j-1},\theta^j) = max(0, \mathbf x^{j-1}.\theta^j+\eta_j)
+$$
+Where: 
+
+  + Matrix $\mathbf{\theta}^j$:
+    + Number of rows: Width of layer $j-1$
+    + Number of columns: Width of layer $j$
+  + Vector $\mathbf x^{j}$
+    + Number of entries: Width of layer $j$
+  + Vector $\mathbf{\eta}_j$  
+  
+# Backpropagation
+
+## The chain rule:
+$$
+
+$$
+
+## Advantages
+
+# Stochastic gradient descent
+
+# Early stopping
+
+
+  
+
+
+
+

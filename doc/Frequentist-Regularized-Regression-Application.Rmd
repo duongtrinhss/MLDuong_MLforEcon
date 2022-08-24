@@ -1,0 +1,222 @@
+---
+title: "Frequentist_Regularized-Regression-Application"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    number_sections: true
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    code_folding: show
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+bibliography: MLrefs.bib
+fontsize: 10pt
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+
+# Example 1: Lasso for Prediction - Ideology
+
+This Lab uses a dataset from Bonica (2018, *American Journal of Political Science*) titled "Inferring Roll-Call Scores from Campaign Contributions Using Supervised Machine Learning". The paper aims to predict the ideology of non-incumbent US congress candidates. The ideology of a person is usually estimated with roll-call scaling models. However, roll-call-based measures of ideology require that a candidate is already an office-holder. This limitation precludes estimating scores for non-incumbent candidates prior to taking office. The idea of the paper is to estimate the DW-NOMINATE score---a measure of ideology---of a candidate using campaign contribution data. Such data is available for both, incumbent and non-incumbent candidates. The DW-NOMINATE sore ranges between -1 and 1 where 1 corresponds to conservative and -1 to liberal. 
+
+Some details about the dataset you will be using: 
+
+- The file `Ideology_data.RData` contains a list named `sml.data` of several objects. You can import the list using `load()`. To explore the contents of the list, you can use `str(sml.data)`. `str(sml.data,max.level=1)` shows only the first level of the list.
+- Among the objects included in `sml.data` are `x.train` and `y.train`. The dataset `x.train` contains the features of 1786 candidates of whom the DW-NOMINATE scores are available. The corresponding DW-NOMINATE scores are stored in the vector `y.train`
+- The table `Variable_description.csv` contains a short description of each variable included in the dataset `x.train` and `dta`. Each observation represents a candidate who runs for federal office in at least one of the 1980-2014 election cycles.
+- The donation variables have been pre-processed that only donators who made campaign contributions to at least 15 distinct candidates are included in the features set.
+- The dataset `dta` includes donation information of additional 47125 candidates. A complete list of the candidates can be found in `ccands`. Note that you won't use `dta` and `ccands` for this lab.
+
+```{r}
+load("/Users/duongtrinh/Dropbox/FIELDS/Machine Learning/Courses/[2022] SGPE Summer School/Tutorials/1_Lasso_Ideology/Ideology_data.RData")
+x.train <- sml.data$x.train
+y.train <- sml.data$y.train
+rm(sml.data)
+```
+
+## Inspecting the data
+
+Inspect the objects `x.train` and `y.train`. `y.train` is a numeric vector. What is the class type of `x.train` called? What is the dimension of `x.train`?
+
+```{r}
+class(x.train)
+dim(x.train)
+```
+
+## Sparse Matrices
+
+The data in `x.train` is not stored using a regular `matrix` object. Since `x.train` contains many zeros (donators only transfer money to a few candidates), it is a *sparse* matrix. The package `Matrix` has special objects and methods to deal more efficiently with sparse matrices. It would be a waste of memory and computational power to process the the data in a regular way since most data entries are zero. Many functions such as `glmnet` (which we will use below) support sparse matrices. 
+
+Let's get a feel for how much memory we are saving by using sparse matrices. The function `object.size()` tells you how much memory an object is using: 
+```{r echo=TRUE}
+print(object.size(x.train),unit="Mb")
+```
+
+How big would the same matrix be if stored as a normal `matrix` object?
+
+```{r}
+print(object.size(as.matrix(x.train)),unit="Mb")
+```
+
+## Least squares
+
+When faced with variable selection problems, one option would be too include all predictors. Given the dimension of `x.train`, would you have any concerns with applying least squares to the full model including all predictors? Assume you have a fast computer at your disposal; that is, computational time is not an issue. (No computation required.)
+
+## Getting started with glmnet   
+
+Use `library(glmnet)` to fit a lasso regression on the entire data space (i.e., all 67'812 variables). You can find a brief tutorial [here](https://web.stanford.edu/~hastie/glmnet/glmnet_alpha.html). 
+
+```{r}
+library("glmnet")
+lasso_fit <- glmnet(x.train, y.train)
+# coefficient matrix 
+coef(lasso_fit)
+# plot of lasso path
+plot(lasso_fit,xvar="lambda")
+```
+
+Answer the following questions: 
+
+- Obtain the in-sample predicted values for `lambda=0.1`.
+- How many predictors are selected for `lambda=0.1`?
+- Interpret the lasso path plot. 
+
+```{r}
+predict(lasso_fit,s=0.1,newx=x.train)
+sum(as.matrix(coef(lasso_fit,s=0.1,newx=x.train))!=0)
+```
+
+## Ridge regression
+
+Estimate and plot the coefficient path. What differences do you see?
+
+```{r}
+ridge_fit <- glmnet(x.train, y.train, alpha=0)
+# plot ridge path
+plot(ridge_fit,xvar="lambda")
+```
+
+## Cross-validation with lasso
+
+We have fitted the whole lasso and ridge path, but we haven't decided which `lambda` to use for our final prediction model. Use 5-fold cross-validation to identify the MSE-optimal penalty level. Before you fit the lasso model, set the seed to 3 (i.e., `set.seed(3)`).  
+
+```{r echo=TRUE}
+set.seed(3)
+cvlasso_fit <- cv.glmnet(x.train, y.train, nfolds = 5)
+coef(cvlasso_fit,s="lambda.min")
+plot(cvlasso_fit)
+```
+ 
+What's the value of the MSE-minimizing lambda?
+
+```{r}
+lambdas <- cvlasso_fit$glmnet.fit$lambda
+which.min(cvlasso_fit$cvm)
+lambdas[which.min(cvlasso_fit$cvm)]
+cvlasso_fit$lambda.min
+```
+ 
+## Cross-validation with elastic net
+
+We have only cross-validated the `lambda` tuning parameter for `alpha=1` (the lasso). The wrapper function `cva.glmnet` (note the `a`!) from the `glmnetUtils` package provides an easy way to cross-validate both `lambda` and `alpha`. 
+
+```{r}
+library("glmnetUtils")
+set.seed(3)
+elastic_fit <- cva.glmnet(x.train, y.train, nfolds = 5)
+```
+
+What are the values of `lambda` and `alpha` that yield the smallest cross-validated MSE? Is the elastic net doing better than lasso and ridge? 
+
+```{r}
+cvm_mins <- unlist(lapply(elastic_fit$modlist,function(x) min(x$cvm)))
+elastic_fit$alpha[which.min(cvm_mins)]
+```
+
+# Example 2: Lasso for Classification - Spam
+
+## Data preparation and text processing 
+
+```{r}
+library("quanteda")
+library("dplyr")
+library("Matrix")
+dta <- read.csv("/Users/duongtrinh/Dropbox/FIELDS/Machine Learning/Courses/[2022] SGPE Summer School/Tutorials/2_Lasso_Spam/spam.csv")
+```
+
+```{r}
+dta_corpus <- corpus(dta,text_field="v2")
+```
+
+```{r}
+dta_corpus %>% 
+  tokens() %>% 
+  dfm() %>% 
+  topfeatures()
+```
+
+```{r}
+dta_corpus <- dta_corpus %>% 
+  tokens(remove_punct = TRUE, remove_symbols = TRUE, remove_numbers = TRUE) %>% 
+  dfm() %>% 
+  dfm_remove(pattern = stopwords("english")) %>% 
+  dfm_wordstem() %>% 
+  convert(to = "matrix") %>% 
+  as("sparseMatrix")
+```
+
+Each column in the outcome matrix represents a token. The values tell us how often a particular token appears in a message.
+
+Finally, we save the outcome in a separate vector and define a train/test identifier.
+
+```{r}
+y <- as.integer(dta[,1]=="spam")
+train <- sample(c(TRUE,FALSE),replace=TRUE,prob=c(0.5,0.5),size=length(y))
+```
+
+## **glmnet** for classification tasks
+
+```{r}
+library("glmnet")
+set.seed(123)
+lasso_cv <- glmnet::cv.glmnet(x=dta_corpus[train,],y=y[train], family="binomial", type.measure="auc",nfolds=5)
+```
+
+### In-sample Confusion matrix
+
+Obtain the confusion matrix of our lasso classifier using the *training sample*. What's the accuracy of our classifier? What's the number of false positives and false negatives?
+
+```{r}
+lasso_prob.train <- predict(lasso_cv,type="response",s="lambda.min",newx=dta_corpus[train,]) 
+lasso_class.train <- lasso_prob.train > .5
+(cm_lasso <- table(y[train],lasso_class.train))
+sum(diag(cm_lasso))/sum(cm_lasso)
+```
+
+### Out-of-sample Confusion matrix
+
+Obtain tdhe confusion matrix for the *test sample*. What's the accuracy of our classifier? What's the number of false positives and false negatives?
+
+```{r}
+lasso_prob.test <- predict(lasso_cv,type="response",s="lambda.min",newx=dta_corpus[!train,]) 
+lasso_class.test <- lasso_prob.test > .5
+(cm_lasso <- table(y[!train],lasso_class.test))
+sum(diag(cm_lasso))/sum(cm_lasso)
+```
+
+
+
+

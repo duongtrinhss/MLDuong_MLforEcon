@@ -1,0 +1,473 @@
+---
+title: "Frequentist-Regularized-Regression"
+author: "Duong Trinh"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    number_sections: true
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    code_folding: show
+  pdf_document: 
+    number_sections: true
+    extra_dependencies: ["mathtools","bbm"]
+bibliography: MLrefs.bib
+fontsize: 10pt
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output()) 'latex' else 'pandoc'
+})
+```
+
+<!--- For HTML Only --->
+`r if (knitr:::is_html_output()) '
+$\\newcommand{\\mathbbm}[1]{\\mathbb{#1}}$
+'`
+
+```{r}
+# tidyverse (includes ggplot2, dplyr, tidyr), glmnet, ranger, xgboost, mlr3verse, grf, causalforest, policytree, GenericML, DoubleML
+```
+
+# Introduction
+Originally, regularization can be viewed as a constraint on the model space. Consider a classic linear regression model with normally distributed errors
+
+
+\begin{equation}
+\tag{1}
+\mathbf{y}= \mathbf{X}\mathbf{\beta}+\mathbf{\epsilon}, \quad \mathbf{\epsilon} \sim N\left(\mathbf{0},\sigma_{\epsilon}^{2} \mathbf{I}\right)
+\end{equation}
+
+
+
+The corresponding regularized maximum likelihood optimization problem is defined as
+\begin{equation}
+\tag{2}
+\underset{\mathbf{\beta}}{\text{minimize}} \quad\|\mathbf{y}-\mathbf{X}\mathbf{\beta}\|_{2}^{2} \quad \text{subject to} \quad \phi(\mathbf{\beta}) \leq s
+\end{equation}
+
+of which the solution could be written in the alternative form
+
+\begin{equation}
+\tag{3}
+\hat{\mathbf{\beta}} = \underset{\mathbf{\beta}}{\text{argmin}} \quad\|\mathbf{y}-\mathbf{X}\mathbf{\beta}\|_{2}^{2} + \lambda \phi(\mathbf{\beta})
+\end{equation}
+
+
+where:
+
+  + $\mathbf{y}$ is the vector of observed outcomes, $\mathbf{X}$ is a design matrix, $\mathbf{\beta}$ are the model parameters. 
+    
+  + $s$ in (2) or $\lambda$ in (3) is a tuning parameter (hyper-parameter) controlling the strength of the penalty. (the bias-variance trade-off).
+    
+  + $\phi(\mathbf{\beta})$ is a regularization term (penalty). 
+
+In general, a separable penalty is of the form: $\phi(\mathbf{\beta}) = \sum_{j = 1}^{p}\phi(\beta_j)$, where $\phi(\beta_j)$ is a penalty function applied for each component $\beta_j$. In fact, each appropriate choice of the regularization term is associated with a desirable estimator in (1). Mathematically, a regularized solution can be defined by constraining the topology of a search space to a ball.
+
+## Lasso
+The Lasso (Least Absolute Shrinkage and Selection Operator, Tibshirani (1996)) penalizes the sum of the absolute values of the coefficients (L1 norm):
+$$
+ \hat{\beta} = \text{argmin} \quad\|\mathbf{y}-\mathbf{X}\mathbf{\beta}\|_{2}^{2} + \frac{\lambda}{n} \| \beta \|_1
+$$
+
+where $L_1$ norm $\| \beta \|_1 = \sum_{i = 1}^{p} \mid\beta_i\mid$
+
+### Square root Lasso {-}
+
+$$
+ \hat{\beta} = \text{argmin} \quad \sqrt{\|\mathbf{y}-\mathbf{X}\mathbf{\beta}\|_{2}^{2}} + \frac{\lambda}{n} \| \beta \|_1
+$$
+
++ The main advantage 
+
+### Adaptive Lasso {-}
+
+
+
+## Ridge
+
+$$
+ \hat{\beta} = \text{argmin} \quad\|\mathbf{y}-\mathbf{X}\mathbf{\beta}\|_{2}^{2} + \frac{\lambda}{n} \| \beta \|_2
+$$
+
+where $L_2$ norm $\| \beta \|_2 = \sum_{i = 1}^{p} \beta_i ^ 2$
+
++ Ridge has a closed-form solution:
+
++ Dense solution
+
+## Elastic Net
+
+
+## Standardization
+
++ We should always standardize the predictors
+
++ 
+
+# Illustration
+Reference Manual: 
+
+  + [Package `glmnet`](https://cran.r-project.org/web/packages/glmnet/index.html)
+
+  + [An Introduction to `glmnet`
+](https://glmnet.stanford.edu/articles/glmnet.html)
+
+```{r, message=FALSE}
+# install.packages("glmnet", dependencies = TRUE)
+library(glmnet)
+# install.packages("caret", dependencies = TRUE) # clasification and regression training (for pre-processing, data splitting)
+library(caret)
+library(tidyverse)
+library(ggplot2)
+```
+
+## Real dataset
+
+```{r}
+# data(QuickStartExample)
+# x <- QuickStartExample$x
+# y <- QuickStartExample$y
+# 
+# fit <- glmnet(x, y)
+# 
+# plot(fit)
+# print(fit)
+# 
+# cv <- cv.glmnet(x, y)
+# plot(cv)
+# ggplot(data.frame(beta = 1:(ncol(x)+1), value = coef(cv, s = "lambda.min")[,"s1"]),
+#        aes(x = beta, y = value)) +
+#   geom_col()
+
+# ggplot(data.frame(beta = 1:(ncol(x)+1), value = coef(cv, s = "lambda.1se")[,"s1"]),
+#        aes(x = beta, y = value)) +
+#   geom_col()
+```
+
+## Monte Carlo study
+
+```{r}
+# library(pracma) # for a (non-symmetric) Toeplitz matrix
+GenRegr <- function(n,p,options) {
+  # Generate predictors x
+  if (options.corr == 0) {# Uncorrelated predictors
+    x = matrix(rnorm(n*p),n,p)
+  }
+  else if (options.corr == 1) {# Spatially ncorrelated predictors
+    C = toeplitz(options.rho^(0:(p-1)))
+    x = matrix(rnorm(n*p),n,p)*chol(C)
+  }
+  else {
+    print('Wrong choice of options.corr')
+  }
+  
+  x <- data.matrix(sapply(data.frame(x), function(x) {(x-mean(x))/sd(x)})) # Standardize x
+  
+  # Generate coefficients
+  beta <- rep(0,p)
+  beta[1:6] <- c(1.5,-1.5,2,-2,2.5,-2.5)
+  
+  if (options.corr == 0) {
+    signal_y <- sum(beta^2)
+  } 
+  else if (options.corr == 1) {
+    signal_y <- sum((chol(C)%*%beta)^2)
+  }
+  
+  c <- signal_y*((1-options.R2)/options.R2) # mean(sigmasq) is c to obtain desirable options.R2 (or SNR)
+  
+  # Generate epsilon
+  if (options.epsilon == 0) { # iid error
+    sigmasq <- c
+  } 
+  else if (options.epsilon == 1) {
+    temp = (x%*%beta)
+    sigmasq = c*temp/mean(temp)
+  }
+  
+  epsilon = sqrt(sigmasq) * rnorm(n)
+  
+  # Generate y
+  y = x%*%beta + epsilon
+  
+  return(list(y = y, x = x, beta = beta, sigmasq = sigmasq))
+}
+
+# DGP1
+set.seed(2907)
+n = 100
+p = 150
+options.corr = 0
+options.R2 = 0.8
+options.epsilon = 0
+options.rho = NA
+
+df <- GenRegr(n, p, options)
+
+y <- df$y
+X <- df$x
+beta_true <-  df$beta
+sigmasq_true <- df$sigmasq
+
+dat <- data.frame(y,X)
+
+
+# beta_names <- map_chr(1:length(beta_true),~paste0("b",.x))
+# df_beta <- data.frame(beta = factor(beta_names, levels = beta_names), value = beta_true)
+
+df_beta <- data.frame(beta = 1:length(beta_true), value = beta_true)
+
+ggplot(df_beta, aes(x = beta, y = value)) +
+  geom_col() 
+  
+```
+
+```{r}
+# # WangDesign 
+# 
+# n_training <- n
+# n <- n_training + n_test
+# 
+# x <- matrix(rnorm(n*p),n,p)
+# gamma <- rep(0,p)
+# gamma[sample(1:p, size = s0, replace = FALSE)] = 1
+# beta0 <- rep(0,p)
+# beta0[which(gamma==1)] <- beta_value
+```
+
+
+```{r}
+# Data Partitioning
+set.seed(100)
+index <-  sample(1:nrow(dat), 0.7*nrow(dat))
+
+str(index)
+
+train <- dat[index,] # 70x(p+1)
+test <- dat[-index,] # 30x(p+1)
+
+cols <- names(dat)[2:(p+1)]
+# Scaling the numeric features
+pre_proc_val <- preProcess(train[,cols], method = c("center","scale"))
+
+train[,cols] <- predict(pre_proc_val,train[,cols])
+test[,cols] <- predict(pre_proc_val,test[,cols])
+
+# summary(train)
+# summary(test)
+```
+
+### Estimation {-}
+
+```{r}
+library(glmnet)
+
+x <- as.matrix(train[,cols])
+y_train = train$y
+
+x_test <- as.matrix(test[,cols])
+y_test = test$y
+
+
+ridge_reg <- function(x,y,x_test) {
+  cv_pen <- cv.glmnet(x, y, alpha = 0, nlambda = 100,
+                      family = 'gaussian', standardize = TRUE, nfolds = 5)
+  run_pen <- glmnet(x, y, alpha = 0, lambda = cv_pen$lambda,
+                    family = 'gaussian', standardize = TRUE, nfolds = 5)
+  solution_path <- Matrix(run_pen$beta, sparse = TRUE)
+  colnames(solution_path) <- cv_pen$lambda
+  lambda.min_idx <- which.min(abs(cv_pen$lambda-cv_pen$lambda.min))
+  beta.cv <- solution_path[,lambda.min_idx]
+  
+  y.fit <- x_test%*%beta.cv
+  
+  return(list(beta.cv = beta.cv, y.fit = y.fit))
+}
+
+lasso_reg <- function(x,y,x_test) {
+  cv_pen <- cv.glmnet(x, y, alpha = 1, nlambda = 100,
+                      family = 'gaussian', standardize = TRUE, nfolds = 5)
+  run_pen <- glmnet(x, y, alpha = 1, lambda = cv_pen$lambda,
+                    family = 'gaussian', standardize = TRUE, nfolds = 5)
+  solution_path <- Matrix(run_pen$beta, sparse = TRUE)
+  colnames(solution_path) <- cv_pen$lambda
+  lambda.min_idx <- which.min(abs(cv_pen$lambda-cv_pen$lambda.min))
+  beta.cv <- solution_path[,lambda.min_idx]
+  
+  active <- rep(FALSE, ncol(x))
+  active[which(beta.cv!=0)] <- TRUE
+  xnew <- x[,active]
+  beta.ols <- solve(t(xnew)%*%xnew)%*%t(xnew)%*%y
+  beta.debiased <- rep(0, ncol(x))
+  beta.debiased[active] <- beta.ols
+  
+  str(t(xnew)%*%xnew)
+  y.fit <- x_test%*%beta.cv
+  
+  return(list(beta.cv = beta.cv, beta.debiased = beta.debiased, y.fit = y.fit))
+}
+
+elnet_reg <- function(x,y,x_test) {
+  cv_pen <- cv.glmnet(x, y, alpha = 0.3, nlambda = 100,
+                      family = 'gaussian', standardize = TRUE, nfolds = 5)
+  run_pen <- glmnet(x, y, alpha = 0.3, lambda = cv_pen$lambda,
+                    family = 'gaussian', standardize = TRUE, nfolds = 5)
+  solution_path <- Matrix(run_pen$beta, sparse = TRUE)
+  colnames(solution_path) <- cv_pen$lambda
+  lambda.min_idx <- which.min(abs(cv_pen$lambda-cv_pen$lambda.min))
+  beta.cv <- solution_path[,lambda.min_idx]
+  
+  active <- rep(FALSE, ncol(x))
+  active[which(beta.cv!=0)] <- TRUE
+  xnew <- x[,active]
+  beta.ols <- solve(t(xnew)%*%xnew)%*%t(xnew)%*%y
+  beta.debiased <- rep(0, ncol(x))
+  beta.debiased[active] <- beta.ols
+  
+  str(t(xnew)%*%xnew)
+  y.fit <- x_test%*%beta.cv
+  
+  return(list(beta.cv = beta.cv, beta.debiased = beta.debiased, y.fit = y.fit))
+}
+
+
+# # ELASTIC NET
+# # Set training control
+# train_cont <- trainControl(method = "repeatedcv",
+#                               number = 10,
+#                               repeats = 5,
+#                               search = "random",
+#                               verboseIter = TRUE)
+# 
+# # Train the model
+# elastic_reg <- train(y ~ .,
+#                            data = train,
+#                            method = "glmnet",
+#                            preProcess = c("center", "scale"),
+#                            tuneLength = 10,
+#                            trControl = train_cont)
+# 
+# # Optimal tuning parameter
+# elastic_reg$bestTune
+
+
+
+resRidge <- ridge_reg(x,y_train,x_test)
+resLasso <- lasso_reg(x,y_train,x_test)
+resElnet <- elnet_reg(x,y_train,x_test)
+```
+
+
+### Perfomance Metrics {-}
+
+$$
+R^2 = 1 - \frac{SSE}{SST} = 1 - \frac{\sum(y_i - \hat{y_i})^2}{\sum(y_i - \bar{y})^2}
+$$
+
+```{r}
+# Prediction
+RMSE <- function(y_test,y.fit) {
+  sqrt(mean(y_test-y.fit-mean(y_test))^2)
+}
+
+list_yfit <- list(resRidge$y.fit, resLasso$y.fit, resElnet$y.fit)
+
+library(purrr)
+map_dbl(list_yfit, ~RMSE(y_test,.x))
+
+# Variable Selection
+mse <- function(true,fit) {
+  mean(fit-true)^2
+}
+
+bias <- function(true,fit) {
+  mean(abs(fit-true))
+}
+
+list_betafit <- list(resRidge$beta.cv, resLasso$beta.cv, resElnet$beta.cv, resLasso$beta.debiased, resElnet$beta.debiased)
+library(purrr)
+map_dbl(list_betafit, ~mse(beta_true,.x))
+map_dbl(list_betafit, ~bias(beta_true,.x))
+
+
+plot.coef <- function(fit){
+  df_beta <- data.frame(beta = 1:length(fit), true = beta_true, fit = fit) %>% 
+    gather(method, value, -c("beta")) %>% 
+    mutate(method = factor(method, levels = c("true","fit")))
+    
+    
+  ggplot(df_beta, aes(x = beta, y = value, group = method)) +
+  geom_bar(aes(fill = method), stat = "identity", position = "identity", alpha = 0.5) +
+  ylim(-3,3)
+}
+
+lapply(list_betafit,plot.coef)
+```
+
+
+```{python}
+# import numpy as np
+# import matplotlib.pyplot as plt
+# import matplotlib as mpl
+# # try:
+# # from sklearn.linear_model import Lasso
+# # except ModuleNotFoundError:
+# #      pip install -qq scikit-learn
+# #     from sklearn.linear_model import Lasso
+# from sklearn.linear_model import Lasso
+# 
+# def mse(w, f):
+#   return np.mean((w-f)**2)
+# 
+# np.random.seed(0)
+# n, k, sigma = 2**12, 2**10, 1e-2
+# n_spikes = 160
+# f = np.zeros((n,1))
+# perm = np.random.permutation(n)
+# f[perm[:n_spikes]] = np.sign(np.random.randn(n_spikes,1))
+# 
+# R = np.linalg.qr( np.random.randn(n, k))[0].T
+# y = R @ f + sigma*np.random.randn(k, 1)
+# l_max = 0.1 * np.linalg.norm(R.T  @ y, np.inf)
+# 
+# clf = Lasso(alpha=l_max/k, tol=1e-2)
+# clf.fit(R, y)
+# 
+# w = clf.coef_
+# ndx = np.where(np.abs(w) > 0.01 * np.max(np.abs(w)))[0]
+# w_debiased = np.zeros((n,1))
+# w_debiased[ndx,:] = np.linalg.pinv(R[:,ndx]) @ y
+# w_ls = R.T @ y
+# 
+# titles= [f'Original (D = {n}, number of nonzeros = {n_spikes})', 'L1 Reconstruction (K0 = {}, lambda = {:.4f}, MSE = {:.4f})'.format(k, l_max, mse(w,f)),
+#          'Debiased (MSE = {:.4E})'.format(mse(w_debiased,f)), 'Minimum Norm Solution (MSE = {:.4f})'.format(mse(w_ls, f))]
+# 
+# fig, axes = plt.subplots(nrows=4, ncols=1)
+# fig.set_figheight(8)
+# fig.set_figwidth(6)
+# 
+# weights = [f, w, w_debiased, w_ls]
+# 
+# for i, ax in enumerate(axes.flat, start=1):
+#     ax.plot(weights[i-1], linewidth=1.1)
+#     ax.set_title(titles[i-1])
+#     ax.set_xlim(0, n)
+#     ax.set_ylim(-1, 1)
+# 
+# fig.tight_layout()
+# 
+# plt.show()
+```
+
+```{r}
+qplot(x = seq(-3, 3, .1), y = rmutil::dlaplace(seq(-3, 3, .1), 0, .1), geom = "line") +
+  ggtitle("Laplace Prior with tau = 0.5") +
+  xlab(expression(beta[1])) +
+  ylab("Density") +
+  theme_minimal(base_size = 20) 
+```
+
